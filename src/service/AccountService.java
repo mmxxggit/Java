@@ -1,9 +1,9 @@
 package service;
 
-import model.Transaction;
-import storage.JsonStorage;
 import java.time.LocalDate;
 import java.util.*;
+import model.Transaction;
+import storage.JsonStorage;
 
 /**
  * 记账业务逻辑
@@ -20,7 +20,7 @@ public class AccountService {
             date = LocalDate.now().toString();
         }
         Transaction t = new Transaction(0, type, amount, category, note, date);
-        storage.save(t);
+        storage.save(t，true);//FIX:修复了参数错误
         return t;
     }
 

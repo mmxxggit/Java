@@ -10,13 +10,23 @@ public class Main {
 
     private static AccountService service = new AccountService();
 
+    /**
+     * 程序主入口方法
+     * @param args 命令行参数
+     */
     public static void main(String[] args) {
+        // 创建Scanner对象用于读取用户输入
         Scanner scanner = new Scanner(System.in);
+        // 打印程序标题
         System.out.println("=== 个人记账本 ===");
+        // 提示用户输入help查看命令列表
         System.out.println("输入 help 查看命令列表");
 
+        // 无限循环，持续接收用户输入
         while (true) {
+            // 打印提示符
             System.out.print("> ");
+            // 读取用户输入并去除首尾空格
             String line = scanner.nextLine().trim();
             if (line.isEmpty()) continue;
 
