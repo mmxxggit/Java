@@ -33,7 +33,7 @@ public class Main {
             return;
         }
 
-        service = new AccountService(userService.getCurrentUsername());
+        service = new AccountService(userService.getCurrentUsername(), userService.getCurrentPassword());
         // 打印程序标题
         System.out.println("=== 个人记账本 ===");
         // 提示用户输入help查看命令列表
@@ -69,6 +69,9 @@ public class Main {
                     break;
                 case "stats":
                     printStats();
+                    break;
+                case "load":
+                    // TODO: 加载文件
                     break;
                 case "quit":
                 case "exit":

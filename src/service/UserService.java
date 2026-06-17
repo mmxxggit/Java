@@ -17,21 +17,39 @@ import java.util.Base64;
 import java.util.Scanner;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
+import javax.crypto.Cipher;
 import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+/* 
+用户相关服务
+用户数据使用经过AES256加密的JSON文件存储，只有用户登录之后才会解密并读取。用户数据存放在user里，按照用户名进行对应。
+经过加密的数据会经过base64编码。
+
+*/
 
 /**
  * 用户注册和登录服务
  */
 public class UserService {
-
+    /** 存储路径 */
     private static final String USER_DIR = "data/users";
+    /** 用户名规则 */
     private static final Pattern USERNAME_PATTERN = Pattern.compile("[A-Za-z0-9_]{1,32}");
+    /** 口令规则 */
     private static final Pattern PASSWORD_PATTERN = Pattern.compile("\\d{6}");
+    private static final int AES_KEY_BITS = 256;
+    private static final int GCM_TAG_BITS = 128;
+    private static final int IV_BYTES = 12;
+    /** 迭代10000次 */
+    private static final int PBKDF2_ITERATIONS = 10000;
+    /** 随机数 */
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final PasswordEncoder passwordEncoder = createPasswordEncoder();
     private String currentUsername;
+    private String currentPassword;
 
     /**
      * 启动时登录或注册用户
@@ -43,7 +61,7 @@ public class UserService {
             System.out.println("用户名只能包含字母、数字、下划线，长度 1 到 32 位");
             return false;
         }
-
+        /* 登录 */
         if (userExists(username)) {
             boolean loggedIn = login(scanner, username);
             if (loggedIn) {
@@ -51,7 +69,7 @@ public class UserService {
             }
             return loggedIn;
         }
-
+        /* 注册 */
         boolean registered = register(scanner, username);
         if (registered) {
             currentUsername = username;
@@ -67,14 +85,26 @@ public class UserService {
         return currentUsername;
     }
 
+    /**
+     * 登录
+     * @param scanner 用户输入
+     * @param username 输入的用户名
+     * @return
+     */
     private boolean login(Scanner scanner, String username) {
-        String passwordHash = loadPasswordHash(username);
+        String userJson = loadUserJson(username);
         for (int i = 1; i <= 3; i++) {
             System.out.print("请输入密码：");
             String password = scanner.nextLine().trim();
-            if (passwordEncoder.matches(password, passwordHash)) {
-                System.out.println("登录成功");
-                return true;
+            try {
+                String passwordHash = loadPasswordHash(userJson, password);
+                if (passwordEncoder.matches(password, passwordHash)) {
+                    currentPassword = password;
+                    System.out.println("登录成功");
+                    return true;
+                }
+            } catch (IllegalStateException e) {
+                // GCM 认证失败或旧文件密码校验失败，都按密码错误处理。
             }
 
             int remaining = 3 - i;
@@ -87,6 +117,12 @@ public class UserService {
         return false;
     }
 
+    /**
+     * 注册
+     * @param scanner
+     * @param username
+     * @return
+     */
     private boolean register(Scanner scanner, String username) {
         while (true) {
             System.out.print("用户不存在，请设置 6 位数字密码：");
@@ -96,32 +132,58 @@ public class UserService {
                 continue;
             }
 
-            saveUser(username, passwordEncoder.encode(password));
+            currentPassword = password;
+            saveUser(username, passwordEncoder.encode(password), password);
             System.out.println("注册成功，已登录");
             return true;
         }
     }
-
-    private String loadPasswordHash(String username) {
-        File file = getUserFile(username);
-        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+    
+    /**
+     * 获取用户文件
+     * @param username
+     * @return 加密的字符串
+     */
+    private String loadUserJson(String username) {
+        // 用bufferedReader按行读取
+        try (BufferedReader reader = new BufferedReader(new FileReader(getUserFile(username)))) {
             StringBuilder json = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
                 json.append(line);
             }
-
-            Matcher matcher = Pattern.compile("\"passwordHash\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"").matcher(json);
-            if (matcher.find()) {
-                return unescapeJson(matcher.group(1));
-            }
-            throw new IllegalStateException("用户文件格式错误");
+            return json.toString();
         } catch (IOException e) {
             throw new IllegalStateException("读取用户文件失败", e);
         }
     }
+    /**
+     * 
+     * @param userJson
+     * @param password
+     * @return
+     */
+    private String loadPasswordHash(String userJson, String password) {
+        if (isEncryptedUserData(userJson)) {
+            String payload = decryptUserData(userJson, password);
+            String encryptedPasswordHash = getJsonField(payload, "passwordHash");
+            if (!encryptedPasswordHash.isEmpty()) {
+                return encryptedPasswordHash;
+            }
+        }
 
-    private void saveUser(String username, String passwordHash) {
+        Matcher matcher = Pattern.compile("\"passwordHash\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"").matcher(userJson);
+        if (matcher.find()) {
+            return unescapeJson(matcher.group(1));
+        }
+        throw new IllegalStateException("用户密钥文件格式错误");
+    }
+
+    public String getCurrentPassword() {
+        return currentPassword;
+    }
+
+    private void saveUser(String username, String passwordHash, String password) {
         File file = getUserFile(username);
         File parent = file.getParentFile();
         if (!parent.exists() && !parent.mkdirs()) {
@@ -129,15 +191,86 @@ public class UserService {
         }
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
-            writer.println("{");
-            writer.println("  \"username\":\"" + escapeJson(username) + "\",");
-            writer.println("  \"passwordHash\":\"" + escapeJson(passwordHash) + "\",");
-            writer.println("  \"createdAt\":\"" + LocalDateTime.now() + "\",");
-            writer.println("  \"transactions\":[]");
-            writer.println("}");
+            String payload = "{\"passwordHash\":\"" + escapeJson(passwordHash)
+                    + "\",\"createdAt\":\"" + escapeJson(LocalDateTime.now().toString())
+                    + "\",\"transactions\":[]}";
+            writer.println(encryptUserData(username, payload, password));
         } catch (IOException e) {
             throw new IllegalStateException("保存用户文件失败", e);
         }
+    }
+    /* 加密json，选择AES256-GCM，PBKDF2WithHmacSHA256，迭代次数为10000 */
+    public static String encryptUserData(String username, String payloadJson, String password) {
+        try {
+            byte[] salt = new byte[16];
+            byte[] iv = new byte[IV_BYTES];
+            SECURE_RANDOM.nextBytes(salt);
+            SECURE_RANDOM.nextBytes(iv);
+
+            SecretKeySpec key = deriveAesKey(password, salt);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            byte[] cipherText = cipher.doFinal(payloadJson.getBytes("UTF-8"));
+            // 写入加密后的内容包括具体的方式，salt，iv和密文
+            // 使用base64编码，方便存储和传输
+            return "{\n"
+                    + "  \"username\":\"" + escapeJsonStatic(username) + "\",\n"
+                    + "  \"encryption\":\"AES-256-GCM\",\n"
+                    + "  \"kdf\":\"PBKDF2WithHmacSHA256\",\n"
+                    + "  \"iterations\":" + PBKDF2_ITERATIONS + ",\n"
+                    + "  \"salt\":\"" + Base64.getEncoder().encodeToString(salt) + "\",\n"
+                    + "  \"iv\":\"" + Base64.getEncoder().encodeToString(iv) + "\",\n"
+                    + "  \"cipherText\":\"" + Base64.getEncoder().encodeToString(cipherText) + "\"\n"
+                    + "}";
+        } catch (Exception e) {
+            throw new IllegalStateException("用户数据加密失败", e);
+        }
+    }
+
+    /* 解密json */
+    public static String decryptUserData(String encryptedJson, String password) {
+        try {
+            int iterations = Integer.parseInt(getJsonField(encryptedJson, "iterations"));
+            byte[] salt = Base64.getDecoder().decode(getJsonField(encryptedJson, "salt"));
+            byte[] iv = Base64.getDecoder().decode(getJsonField(encryptedJson, "iv"));
+            byte[] cipherText = Base64.getDecoder().decode(getJsonField(encryptedJson, "cipherText"));
+
+            SecretKeySpec key = deriveAesKey(password, salt, iterations);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            return new String(cipher.doFinal(cipherText), "UTF-8");
+        } catch (Exception e) {
+            throw new IllegalStateException("用户数据解密失败，密码或文件内容不正确", e);
+        }
+    }
+
+    public static boolean isEncryptedUserData(String json) {
+        return json != null && json.contains("\"cipherText\"") && json.contains("\"AES-256-GCM\"");
+    }
+
+    public static String getJsonField(String json, String fieldName) {
+        Pattern stringPattern = Pattern.compile("\"" + Pattern.quote(fieldName) + "\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
+        Matcher stringMatcher = stringPattern.matcher(json);
+        if (stringMatcher.find()) {
+            return unescapeJsonStatic(stringMatcher.group(1));
+        }
+
+        Pattern numberPattern = Pattern.compile("\"" + Pattern.quote(fieldName) + "\"\\s*:\\s*(\\d+)");
+        Matcher numberMatcher = numberPattern.matcher(json);
+        if (numberMatcher.find()) {
+            return numberMatcher.group(1);
+        }
+        return "";
+    }
+
+    private static SecretKeySpec deriveAesKey(String password, byte[] salt) throws Exception {
+        return deriveAesKey(password, salt, PBKDF2_ITERATIONS);
+    }
+
+    private static SecretKeySpec deriveAesKey(String password, byte[] salt, int iterations) throws Exception {
+        PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, iterations, AES_KEY_BITS);
+        SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+        return new SecretKeySpec(factory.generateSecret(spec).getEncoded(), "AES");
     }
 
     private File getUserFile(String username) {
@@ -157,6 +290,10 @@ public class UserService {
     }
 
     private String escapeJson(String value) {
+        return escapeJsonStatic(value);
+    }
+
+    private static String escapeJsonStatic(String value) {
         if (value == null) {
             return "";
         }
@@ -169,6 +306,10 @@ public class UserService {
     }
 
     private String unescapeJson(String value) {
+        return unescapeJsonStatic(value);
+    }
+
+    private static String unescapeJsonStatic(String value) {
         StringBuilder result = new StringBuilder();
         boolean escaping = false;
         for (int i = 0; i < value.length(); i++) {

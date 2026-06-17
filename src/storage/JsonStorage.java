@@ -1,6 +1,7 @@
 package storage;
 
 import model.Transaction;
+import service.UserService;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,21 +25,21 @@ public class JsonStorage {
     private List<Transaction> cache = new ArrayList<>();
     private int nextId = 1;
     private String username;
+    private String password;
     private String passwordHash;
     private String createdAt;
 
     public JsonStorage() {
-        this(new File(DATA_FILE), false);
+        this.dataFile = new File(DATA_FILE);
+        this.userBookFile = false;
+        loadFromFile();
     }
 
-    public JsonStorage(String username) {
-        this(new File(USER_DIR, username + ".json"), true);
+    public JsonStorage(String username, String password) {
+        this.dataFile = new File(USER_DIR, username + ".json");
+        this.userBookFile = true;
         this.username = username;
-    }
-
-    private JsonStorage(File dataFile, boolean userBookFile) {
-        this.dataFile = dataFile;
-        this.userBookFile = userBookFile;
+        this.password = password;
         loadFromFile();
     }
 
@@ -136,10 +137,20 @@ public class JsonStorage {
             String json = readFile(dataFile);
             String transactionJson = json;
             if (userBookFile) {
-                username = getStringField(json, "username");
-                passwordHash = getStringField(json, "passwordHash");
-                createdAt = getStringField(json, "createdAt");
-                transactionJson = getTransactionsArray(json);
+                username = UserService.getJsonField(json, "username");
+                if (UserService.isEncryptedUserData(json)) {
+                    String payload = UserService.decryptUserData(json, password);
+                    passwordHash = getStringField(payload, "passwordHash");
+                    if (passwordHash.isEmpty()) {
+                        passwordHash = UserService.getJsonField(json, "passwordHash");
+                    }
+                    createdAt = getStringField(payload, "createdAt");
+                    transactionJson = getTransactionsArray(payload);
+                } else {
+                    passwordHash = getStringField(json, "passwordHash");
+                    createdAt = getStringField(json, "createdAt");
+                    transactionJson = getTransactionsArray(json);
+                }
             }
 
             loadTransactions(transactionJson);
@@ -180,7 +191,7 @@ public class JsonStorage {
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(dataFile))) {
             if (userBookFile) {
-                saveUserBook(writer);
+                writer.println(buildEncryptedUserBook());
             } else {
                 saveTransactionsArray(writer, "");
             }
@@ -189,14 +200,17 @@ public class JsonStorage {
         }
     }
 
-    private void saveUserBook(PrintWriter writer) {
-        writer.println("{");
-        writer.println("  \"username\":\"" + escapeJson(username) + "\",");
-        writer.println("  \"passwordHash\":\"" + escapeJson(passwordHash) + "\",");
-        writer.println("  \"createdAt\":\"" + escapeJson(createdAt) + "\",");
-        writer.println("  \"transactions\":");
-        saveTransactionsArray(writer, "  ");
-        writer.println("}");
+    private String buildEncryptedUserBook() {
+        StringWriter stringWriter = new StringWriter();
+        PrintWriter payloadWriter = new PrintWriter(stringWriter);
+        payloadWriter.println("{");
+        payloadWriter.println("  \"passwordHash\":\"" + escapeJson(passwordHash) + "\",");
+        payloadWriter.println("  \"createdAt\":\"" + escapeJson(createdAt) + "\",");
+        payloadWriter.println("  \"transactions\":");
+        saveTransactionsArray(payloadWriter, "  ");
+        payloadWriter.println("}");
+        payloadWriter.flush();
+        return UserService.encryptUserData(username, stringWriter.toString(), password);
     }
 
     private void saveTransactionsArray(PrintWriter writer, String indent) {

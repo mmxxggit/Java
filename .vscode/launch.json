@@ -9,6 +9,13 @@
             "name": "Main",
             "request": "launch",
             "mainClass": "cli.Main",
+            "projectName": "Javazhongjin 0615_54916da1"
+        },
+        {
+            "type": "java",
+            "name": "Main",
+            "request": "launch",
+            "mainClass": "cli.Main",
             "projectName": "Javazhongjin 0615_b9c0d3c4"
         },
         {

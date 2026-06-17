@@ -16,8 +16,8 @@ public class AccountService {
     public AccountService() {
     }
 
-    public AccountService(String username) {
-        storage = new JsonStorage(username);
+    public AccountService(String username, String password) {
+        storage = new JsonStorage(username, password);
     }
 
     /**
@@ -161,6 +161,7 @@ public class AccountService {
      * 获取所有月份的统计信息
      */
     public List<Map<String, Object>> getMonthlyStatistics() {
+
         Map<String, BigDecimal[]> monthlyTotals = new TreeMap<>();
 
         for (Transaction transaction : storage.findAll()) {
@@ -168,7 +169,7 @@ public class AccountService {
             if (month == null) {
                 continue;
             }
-
+            //用数组和map直接提取进行计算，不需要另外做运算
             BigDecimal[] totals = monthlyTotals.computeIfAbsent(month,
                     key -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});
             BigDecimal amount = BigDecimal.valueOf(transaction.getAmount()).setScale(2);
