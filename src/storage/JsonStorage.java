@@ -17,10 +17,28 @@ import java.util.stream.Collectors;
 public class JsonStorage {
 
     private static final String DATA_FILE = "data/transactions.json";
+    private static final String USER_DIR = "data/users";
+
+    private final File dataFile;
+    private final boolean userBookFile;
     private List<Transaction> cache = new ArrayList<>();
     private int nextId = 1;
+    private String username;
+    private String passwordHash;
+    private String createdAt;
 
     public JsonStorage() {
+        this(new File(DATA_FILE), false);
+    }
+
+    public JsonStorage(String username) {
+        this(new File(USER_DIR, username + ".json"), true);
+        this.username = username;
+    }
+
+    private JsonStorage(File dataFile, boolean userBookFile) {
+        this.dataFile = dataFile;
+        this.userBookFile = userBookFile;
         loadFromFile();
     }
 
@@ -113,53 +131,86 @@ public class JsonStorage {
     }
 
     private void loadFromFile() {
-        File file = new File(DATA_FILE);
-        if (!file.exists()) return;
+        if (!dataFile.exists()) return;
         try {
-            StringBuilder json = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    json.append(line);
-                }
+            String json = readFile(dataFile);
+            String transactionJson = json;
+            if (userBookFile) {
+                username = getStringField(json, "username");
+                passwordHash = getStringField(json, "passwordHash");
+                createdAt = getStringField(json, "createdAt");
+                transactionJson = getTransactionsArray(json);
             }
 
-            Pattern objectPattern = Pattern.compile("\\{([^}]*)\\}");
-            Matcher objectMatcher = objectPattern.matcher(json.toString());
-            int maxId = 0;
-            while (objectMatcher.find()) {
-                Map<String, String> values = parseObjectFields(objectMatcher.group(1));
-                int id = Integer.parseInt(values.getOrDefault("id", "0"));
-                double amount = Double.parseDouble(values.getOrDefault("amount", "0"));
-                Transaction transaction = new Transaction(id, values.get("type"), amount,
-                        values.get("category"), values.get("note"), values.get("date"));
-                cache.add(transaction);
-                maxId = Math.max(maxId, id);
-            }
-            nextId = maxId + 1;
+            loadTransactions(transactionJson);
         } catch (Exception e) {
             throw new IllegalStateException("读取 JSON 文件失败", e);
         }
     }
 
-    private void saveToFile() {
-        File file = new File(DATA_FILE);
-        file.getParentFile().mkdirs();
-        try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
-            writer.println("[");
-            for (int i = 0; i < cache.size(); i++) {
-                Transaction t = cache.get(i);
-                writer.printf(Locale.US,
-                        "  {\"id\":%d, \"type\":\"%s\", \"amount\":%.2f, \"category\":\"%s\", \"note\":\"%s\", \"date\":\"%s\"}",
-                        t.getId(), escapeJson(t.getType()), t.getAmount(), escapeJson(t.getCatgory()),
-                        escapeJson(t.getNote()), escapeJson(t.getDate()));
-                if (i < cache.size() - 1) writer.println(",");
-                else writer.println();
+    private void loadTransactions(String json) {
+        if (json == null || json.trim().isEmpty()) {
+            return;
+        }
+
+        Pattern objectPattern = Pattern.compile("\\{([^}]*)\\}");
+        Matcher objectMatcher = objectPattern.matcher(json);
+        int maxId = 0;
+        while (objectMatcher.find()) {
+            Map<String, String> values = parseObjectFields(objectMatcher.group(1));
+            if (!values.containsKey("id")) {
+                continue;
             }
-            writer.println("]");
+
+            int id = Integer.parseInt(values.getOrDefault("id", "0"));
+            double amount = Double.parseDouble(values.getOrDefault("amount", "0"));
+            Transaction transaction = new Transaction(id, values.get("type"), amount,
+                    values.get("category"), values.get("note"), values.get("date"));
+            cache.add(transaction);
+            maxId = Math.max(maxId, id);
+        }
+        nextId = maxId + 1;
+    }
+
+    private void saveToFile() {
+        File parent = dataFile.getParentFile();
+        if (parent != null) {
+            parent.mkdirs();
+        }
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(dataFile))) {
+            if (userBookFile) {
+                saveUserBook(writer);
+            } else {
+                saveTransactionsArray(writer, "");
+            }
         } catch (IOException e) {
             throw new IllegalStateException("写入 JSON 文件失败", e);
         }
+    }
+
+    private void saveUserBook(PrintWriter writer) {
+        writer.println("{");
+        writer.println("  \"username\":\"" + escapeJson(username) + "\",");
+        writer.println("  \"passwordHash\":\"" + escapeJson(passwordHash) + "\",");
+        writer.println("  \"createdAt\":\"" + escapeJson(createdAt) + "\",");
+        writer.println("  \"transactions\":");
+        saveTransactionsArray(writer, "  ");
+        writer.println("}");
+    }
+
+    private void saveTransactionsArray(PrintWriter writer, String indent) {
+        writer.println(indent + "[");
+        for (int i = 0; i < cache.size(); i++) {
+            Transaction t = cache.get(i);
+            writer.printf(Locale.US,
+                    indent + "  {\"id\":%d, \"type\":\"%s\", \"amount\":%.2f, \"category\":\"%s\", \"note\":\"%s\", \"date\":\"%s\"}",
+                    t.getId(), escapeJson(t.getType()), t.getAmount(), escapeJson(t.getCatgory()),
+                    escapeJson(t.getNote()), escapeJson(t.getDate()));
+            if (i < cache.size() - 1) writer.println(",");
+            else writer.println();
+        }
+        writer.println(indent + "]");
     }
 
     private Map<String, String> parseObjectFields(String objectBody) {
@@ -174,6 +225,69 @@ public class JsonStorage {
             values.put(fieldMatcher.group(1), value);
         }
         return values;
+    }
+
+    private String getStringField(String json, String fieldName) {
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(fieldName) + "\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
+        Matcher matcher = pattern.matcher(json);
+        if (matcher.find()) {
+            return unescapeJson(matcher.group(1));
+        }
+        return "";
+    }
+
+    private String getTransactionsArray(String json) {
+        Matcher matcher = Pattern.compile("\"transactions\"\\s*:").matcher(json);
+        if (!matcher.find()) {
+            return "";
+        }
+
+        int start = json.indexOf('[', matcher.end());
+        if (start < 0) {
+            return "";
+        }
+
+        int depth = 0;
+        boolean inString = false;
+        boolean escaping = false;
+        for (int i = start; i < json.length(); i++) {
+            char current = json.charAt(i);
+            if (escaping) {
+                escaping = false;
+                continue;
+            }
+            if (current == '\\') {
+                escaping = true;
+                continue;
+            }
+            if (current == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (current == '[') {
+                depth++;
+            } else if (current == ']') {
+                depth--;
+                if (depth == 0) {
+                    return json.substring(start, i + 1);
+                }
+            }
+        }
+        throw new IllegalStateException("transactions 数组格式错误");
+    }
+
+    private String readFile(File file) throws IOException {
+        StringBuilder json = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                json.append(line);
+            }
+        }
+        return json.toString();
     }
 
     private void resetIds() {

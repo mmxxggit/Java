@@ -7,13 +7,15 @@ import java.util.Map;
 import java.util.Scanner;
 import model.Transaction;
 import service.AccountService;
+import service.UserService;
 
 /**
  * 命令行入口
  */
 public class Main {
 
-    private static AccountService service = new AccountService();
+    private static AccountService service;
+    private static UserService userService = new UserService();
 
     /**
      * 程序主入口方法
@@ -22,6 +24,16 @@ public class Main {
     public static void main(String[] args) {
         // 创建Scanner对象用于读取用户输入
         Scanner scanner = new Scanner(System.in);
+        try {
+            if (!userService.loginOrRegister(scanner)) {
+                return;
+            }
+        } catch (IllegalStateException e) {
+            System.out.println("用户认证失败：" + e.getMessage());
+            return;
+        }
+
+        service = new AccountService(userService.getCurrentUsername());
         // 打印程序标题
         System.out.println("=== 个人记账本 ===");
         // 提示用户输入help查看命令列表

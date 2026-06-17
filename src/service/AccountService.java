@@ -13,6 +13,13 @@ public class AccountService {
 
     private JsonStorage storage = new JsonStorage();
 
+    public AccountService() {
+    }
+
+    public AccountService(String username) {
+        storage = new JsonStorage(username);
+    }
+
     /**
      * 添加交易记录
      */
