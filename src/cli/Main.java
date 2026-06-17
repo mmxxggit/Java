@@ -14,6 +14,8 @@ import service.UserService;
  */
 public class Main {
 
+    private static final String DEFAULT_IMPORT_FILE = "data/data.csv";
+    private static final String DEFAULT_EXPORT_FILE = "data/export.csv";
     private static AccountService service;
     private static UserService userService = new UserService();
 
@@ -70,8 +72,14 @@ public class Main {
                 case "stats":
                     printStats();
                     break;
-                case "load":
-                    // TODO: 加载文件
+                case "inport":
+                case "import":
+                    String importPath = parts.length > 1 ? parts[1].trim() : DEFAULT_IMPORT_FILE;
+                    importTransactions(importPath);
+                    break;
+                case "export":
+                    String exportPath = parts.length > 1 ? parts[1].trim() : DEFAULT_EXPORT_FILE;
+                    exportTransactions(exportPath);
                     break;
                 case "quit":
                 case "exit":
@@ -90,6 +98,8 @@ public class Main {
         System.out.println("  list -amount - 按金额由大到小排序");
         System.out.println("  delete <id> - 删除指定 ID 的记录");
         System.out.println("  stats  - 按月统计收入和支出");
+        System.out.println("  inport [csv路径] - 导入 CSV，默认 data/data.csv");
+        System.out.println("  export [csv路径] - 导出 CSV，默认 data/export.csv");
         System.out.println("  exit   - 退出");
     }
 
@@ -196,5 +206,24 @@ public class Main {
 
     private static String formatAmount(BigDecimal amount) {
         return amount.setScale(2).toPlainString();
+    }
+
+    private static void importTransactions(String filePath) {
+        try {
+            Map<String, Integer> result = service.importFromCSV(filePath);
+            System.out.println("导入完成，成功 " + result.get("imported") + " 条，跳过 "
+                    + result.get("skipped") + " 条");
+        } catch (IllegalStateException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    private static void exportTransactions(String filePath) {
+        try {
+            service.exportToCSV(filePath);
+            System.out.println("导出成功：" + filePath);
+        } catch (IllegalStateException e) {
+            System.out.println(e.getMessage());
+        }
     }
 }

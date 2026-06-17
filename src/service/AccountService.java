@@ -1,5 +1,12 @@
 package service;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.*;
@@ -207,6 +214,52 @@ public class AccountService {
     }
 
     /**
+     * 从 CSV 导入记录，返回 {imported: 成功条数, skipped: 跳过条数}
+     */
+    public Map<String, Integer> importFromCSV(String filePath) {
+        int imported = 0;
+        int skipped = 0;
+
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(filePath), "UTF-8"))) {
+            String line;
+            boolean firstLine = true;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+
+                List<String> fields = parseCsvLine(line);
+                if (firstLine) {
+                    firstLine = false;
+                    if (!fields.isEmpty() && "id".equalsIgnoreCase(fields.get(0).trim())) {
+                        continue;
+                    }
+                }
+
+                if (fields.size() < 6) {
+                    skipped++;
+                    continue;
+                }
+
+                try {
+                    addTransaction(fields.get(1), fields.get(2), fields.get(3), fields.get(4), fields.get(5));
+                    imported++;
+                } catch (IllegalArgumentException | IllegalStateException e) {
+                    skipped++;
+                }
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("导入 CSV 失败：" + e.getMessage(), e);
+        }
+
+        Map<String, Integer> result = new HashMap<>();
+        result.put("imported", imported);
+        result.put("skipped", skipped);
+        return result;
+    }
+
+    /**
      * 获取分类统计
      */
     public List<Map<String, Object>> getCategoryBreakdown(int year, int month) {
@@ -239,6 +292,62 @@ public class AccountService {
      * 导出 CSV
      */
     public void exportToCSV(String filePath) {
-        // TODO: 实现 CSV 导出
+        File file = new File(filePath);
+        File parent = file.getParentFile();
+        if (parent != null) {
+            parent.mkdirs();
+        }
+
+        try (PrintWriter writer = new PrintWriter(
+                new OutputStreamWriter(new FileOutputStream(file), "UTF-8"))) {
+            writer.println("id,type,amount,category,note,date");
+            for (Transaction transaction : listTransactions(false)) {
+                writer.printf(Locale.US, "%d,%s,%.2f,%s,%s,%s%n",
+                        transaction.getId(),
+                        escapeCsv(transaction.getType()),
+                        transaction.getAmount(),
+                        escapeCsv(transaction.getCatgory()),
+                        escapeCsv(transaction.getNote()),
+                        escapeCsv(transaction.getDate()));
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("导出 CSV 失败：" + e.getMessage(), e);
+        }
+    }
+
+    private List<String> parseCsvLine(String line) {
+        List<String> fields = new ArrayList<>();
+        StringBuilder field = new StringBuilder();
+        boolean inQuotes = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char current = line.charAt(i);
+            if (current == '"') {
+                if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                    field.append('"');
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (current == ',' && !inQuotes) {
+                fields.add(field.toString().trim());
+                field.setLength(0);
+            } else {
+                field.append(current);
+            }
+        }
+        fields.add(field.toString().trim());
+        return fields;
+    }
+
+    private String escapeCsv(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        if (value.contains(",") || value.contains("\"") || value.contains("\r") || value.contains("\n")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
     }
 }

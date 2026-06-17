@@ -267,6 +267,14 @@ public class UserService {
         return deriveAesKey(password, salt, PBKDF2_ITERATIONS);
     }
 
+    /**
+     * 生成AES密钥
+     * @param password
+     * @param salt
+     * @param iterations = 10000
+     * @return
+     * @throws Exception
+     */
     private static SecretKeySpec deriveAesKey(String password, byte[] salt, int iterations) throws Exception {
         PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, iterations, AES_KEY_BITS);
         SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
