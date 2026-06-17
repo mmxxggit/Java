@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 public class Transaction {
 
     private int id;
-    private String type;        // "income" 或 "expense"
+    private String type;        // "收入" 或 "支出"
     private double amount;      // 金额（元）
     private String catgory;     // 分类
     private String note;        // 备注

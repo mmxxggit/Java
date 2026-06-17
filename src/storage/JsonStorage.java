@@ -3,7 +3,12 @@ package storage;
 import model.Transaction;
 import java.io.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -27,8 +32,10 @@ public class JsonStorage {
         cache.add(transaction);
         try {
             saveToFile();
-        } catch (Exception e) {
-            // 暂时忽略
+        } catch (RuntimeException e) {
+            cache.remove(transaction);
+            nextId--;
+            throw e;
         }
     }
 
@@ -71,7 +78,23 @@ public class JsonStorage {
      * 删除记录
      */
     public boolean delete(int id) {
-        return cache.removeIf(t -> t.getId() == id);
+        for (int i = 0; i < cache.size(); i++) {
+            if (cache.get(i).getId() == id) {
+                List<Transaction> snapshot = copyCache();
+                int originalNextId = nextId;
+                try {
+                    cache.remove(i);
+                    resetIds();
+                    saveToFile();
+                    return true;
+                } catch (RuntimeException e) {
+                    cache = snapshot;
+                    nextId = originalNextId;
+                    throw e;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -92,8 +115,31 @@ public class JsonStorage {
     private void loadFromFile() {
         File file = new File(DATA_FILE);
         if (!file.exists()) return;
-        // TODO: 从 JSON 文件加载数据
-        // 提示：可以使用简单的文本解析，或引入 Gson/Jackson
+        try {
+            StringBuilder json = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+            }
+
+            Pattern objectPattern = Pattern.compile("\\{([^}]*)\\}");
+            Matcher objectMatcher = objectPattern.matcher(json.toString());
+            int maxId = 0;
+            while (objectMatcher.find()) {
+                Map<String, String> values = parseObjectFields(objectMatcher.group(1));
+                int id = Integer.parseInt(values.getOrDefault("id", "0"));
+                double amount = Double.parseDouble(values.getOrDefault("amount", "0"));
+                Transaction transaction = new Transaction(id, values.get("type"), amount,
+                        values.get("category"), values.get("note"), values.get("date"));
+                cache.add(transaction);
+                maxId = Math.max(maxId, id);
+            }
+            nextId = maxId + 1;
+        } catch (Exception e) {
+            throw new IllegalStateException("读取 JSON 文件失败", e);
+        }
     }
 
     private void saveToFile() {
@@ -103,14 +149,87 @@ public class JsonStorage {
             writer.println("[");
             for (int i = 0; i < cache.size(); i++) {
                 Transaction t = cache.get(i);
-                writer.printf("  {\"id\":%d, \"type\":\"%s\", \"amount\":%.2f, \"category\":\"%s\", \"note\":\"%s\", \"date\":\"%s\"}",
-                        t.getId(), t.getType(), t.getAmount(), t.getCatgory(), t.getNote(), t.getDate());
+                writer.printf(Locale.US,
+                        "  {\"id\":%d, \"type\":\"%s\", \"amount\":%.2f, \"category\":\"%s\", \"note\":\"%s\", \"date\":\"%s\"}",
+                        t.getId(), escapeJson(t.getType()), t.getAmount(), escapeJson(t.getCatgory()),
+                        escapeJson(t.getNote()), escapeJson(t.getDate()));
                 if (i < cache.size() - 1) writer.println(",");
                 else writer.println();
             }
             writer.println("]");
         } catch (IOException e) {
-            // 文件写入失败
+            throw new IllegalStateException("写入 JSON 文件失败", e);
         }
+    }
+
+    private Map<String, String> parseObjectFields(String objectBody) {
+        Map<String, String> values = new HashMap<>();
+        Pattern fieldPattern = Pattern.compile("\"(id|type|amount|category|note|date)\"\\s*:\\s*(\"(?:\\\\.|[^\"])*\"|-?\\d+(?:\\.\\d+)?)");
+        Matcher fieldMatcher = fieldPattern.matcher(objectBody);
+        while (fieldMatcher.find()) {
+            String value = fieldMatcher.group(2);
+            if (value.startsWith("\"") && value.endsWith("\"")) {
+                value = unescapeJson(value.substring(1, value.length() - 1));
+            }
+            values.put(fieldMatcher.group(1), value);
+        }
+        return values;
+    }
+
+    private void resetIds() {
+        for (int i = 0; i < cache.size(); i++) {
+            cache.get(i).setId(i + 1);
+        }
+        nextId = cache.size() + 1;
+    }
+
+    private List<Transaction> copyCache() {
+        List<Transaction> copied = new ArrayList<>();
+        for (Transaction transaction : cache) {
+            Transaction copy = new Transaction(transaction.getId(), transaction.getType(), transaction.getAmount(),
+                    transaction.getCatgory(), transaction.getNote(), transaction.getDate());
+            copy.setCreatedAt(transaction.getCreatedAt());
+            copied.add(copy);
+        }
+        return copied;
+    }
+
+    private String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n")
+                .replace("\t", "\\t");
+    }
+
+    private String unescapeJson(String value) {
+        StringBuilder result = new StringBuilder();
+        boolean escaping = false;
+        for (int i = 0; i < value.length(); i++) {
+            char current = value.charAt(i);
+            if (escaping) {
+                switch (current) {
+                    case '"': result.append('"'); break;
+                    case '\\': result.append('\\'); break;
+                    case 'r': result.append('\r'); break;
+                    case 'n': result.append('\n'); break;
+                    case 't': result.append('\t'); break;
+                    default: result.append(current);
+                }
+                escaping = false;
+            } else if (current == '\\') {
+                escaping = true;
+            } else {
+                result.append(current);
+            }
+        }
+        if (escaping) {
+            result.append('\\');
+        }
+        return result.toString();
     }
 }
